@@ -1,6 +1,8 @@
 import { useRef, useState, useEffect, useCallback, useContext, forwardRef, useImperativeHandle } from 'react';
 import { SocketContext } from '../context/SocketContext';
 import { useDrawing } from '../hooks/useDrawing';
+import { useCursor } from '../hooks/useCursor';
+import RemoteCursors from './RemoteCursors';
 import './Whiteboard.css';
 
 const COLORS = [
@@ -18,7 +20,7 @@ const WIDTHS = [2, 4, 8, 14];
  *   isJoined   {boolean}  Whether socket room has been joined
  *   onClearBroadcast {fn} Called when the user clicks Clear (lets parent emit canvas:clear)
  */
-const Whiteboard = forwardRef(function Whiteboard({ isJoined = false }, ref) {
+const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = [] }, ref) {
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -35,6 +37,10 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false }, ref) {
 
   const { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, replayHistory } =
     useDrawing(socket, canvasRef, ctxRef, toolState, isJoined);
+
+  // Cursor tracking
+  const { remoteCursors, emitCursorMove, emitCursorHide } =
+    useCursor(socket, isJoined, users);
 
   // ─── Canvas Setup ─────────────────────────────────────
   useEffect(() => {
@@ -115,14 +121,23 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false }, ref) {
     ctx.stroke();
 
     if (isJoined) emitDrawMove(currentPos.x, currentPos.y);
+    // Also update cursor position while drawing
+    emitCursorMove(currentPos.x, currentPos.y);
     lastPos.current = currentPos;
-  }, [isDrawing, getPosition, isJoined, emitDrawMove]);
+  }, [isDrawing, getPosition, isJoined, emitDrawMove, emitCursorMove]);
 
   const stopDrawing = useCallback(() => {
     if (!isDrawing) return;
     setIsDrawing(false);
     if (isJoined) emitDrawEnd();
   }, [isDrawing, isJoined, emitDrawEnd]);
+
+  /** Track cursor position even when not drawing */
+  const handleMouseMove = useCallback((e) => {
+    const pos = getPosition(e);
+    emitCursorMove(pos.x, pos.y);
+    draw(e); // forward to drawing handler
+  }, [getPosition, emitCursorMove, draw]);
 
   // ─── Clear ────────────────────────────────────────────
   const handleClear = useCallback(() => {
@@ -202,13 +217,15 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false }, ref) {
           id="whiteboard-canvas"
           className={`whiteboard-canvas${isDrawing ? ' drawing' : ''}`}
           onMouseDown={startDrawing}
-          onMouseMove={draw}
+          onMouseMove={handleMouseMove}
           onMouseUp={stopDrawing}
-          onMouseLeave={stopDrawing}
+          onMouseLeave={() => { stopDrawing(); emitCursorHide(); }}
           onTouchStart={startDrawing}
           onTouchMove={draw}
           onTouchEnd={stopDrawing}
         />
+        {/* Remote cursors overlay */}
+        <RemoteCursors cursors={remoteCursors} />
       </div>
     </div>
   );

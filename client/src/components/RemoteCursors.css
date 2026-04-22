@@ -1,0 +1,49 @@
+/* ─── Container — fills the canvas area ────────────────── */
+
+.remote-cursors {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;   /* Never blocks drawing */
+  z-index: 10;
+  overflow: hidden;
+}
+
+/* ─── Individual cursor ─────────────────────────────────── */
+
+.remote-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+
+  /* GPU-accelerated movement */
+  will-change: transform;
+  transition: transform 60ms linear;
+}
+
+/* ─── Arrow SVG ─────────────────────────────────────────── */
+
+.cursor-svg {
+  display: block;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.4));
+}
+
+/* ─── Name label ────────────────────────────────────────── */
+
+.cursor-label {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: white;
+  white-space: nowrap;
+  margin-left: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  letter-spacing: 0.01em;
+  opacity: 0.95;
+}

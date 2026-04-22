@@ -175,7 +175,7 @@ export default function Room() {
 
       {/* Canvas Area */}
       <main className="room-canvas-area">
-        <Whiteboard ref={whiteboardRef} isJoined={isJoined} />
+        <Whiteboard ref={whiteboardRef} isJoined={isJoined} users={users} />
       </main>
 
       {/* Toast notifications */}
