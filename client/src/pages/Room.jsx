@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
+import { useRoom } from '../hooks/useRoom';
+import { useToasts, ToastContainer } from '../components/Toast';
 import ConnectionStatus from '../components/ConnectionStatus';
 import Whiteboard from '../components/Whiteboard';
 import './Room.css';
@@ -12,55 +14,93 @@ export default function Room() {
   const { socket, connectSocket, disconnectSocket, isConnected } = useSocket();
 
   const username = searchParams.get('username') || 'Anonymous';
-  const [users, setUsers] = useState([]);
-  const [currentUser, setCurrentUser] = useState(null);
-  const [copied, setCopied] = useState(false);
 
-  // Connect socket and join room
+  // ─── Room membership ─────────────────────────────────
+  const { currentUser, users, isJoined, joinRoom } = useRoom(socket, roomId, username);
+
+  // ─── Toast notifications ──────────────────────────────
+  const { toasts, showToast } = useToasts();
+
+  // Track previous users list to detect changes
+  const prevUsersRef = useRef([]);
+  const hasJoinedRef = useRef(false);
+
+  // ─── Connect socket & join room on mount ──────────────
   useEffect(() => {
     connectSocket();
 
     function onConnect() {
-      socket.emit('room:join', { roomId, username });
-    }
-
-    function onRoomJoined(data) {
-      setCurrentUser(data.user);
-      setUsers(data.users);
-    }
-
-    function onUserJoined({ user }) {
-      setUsers((prev) => [...prev, user]);
-    }
-
-    function onUserLeft({ users: updatedUsers }) {
-      setUsers(updatedUsers);
+      joinRoom();
     }
 
     socket.on('connect', onConnect);
-    socket.on('room:joined', onRoomJoined);
-    socket.on('room:user-joined', onUserJoined);
-    socket.on('room:user-left', onUserLeft);
 
     // If already connected, join immediately
     if (socket.connected) {
-      onConnect();
+      joinRoom();
     }
 
     return () => {
       socket.off('connect', onConnect);
-      socket.off('room:joined', onRoomJoined);
-      socket.off('room:user-joined', onUserJoined);
-      socket.off('room:user-left', onUserLeft);
       socket.emit('room:leave');
       disconnectSocket();
     };
-  }, [roomId, username, socket, connectSocket, disconnectSocket]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
 
+  // ─── Toast on user join / leave ───────────────────────
+  useEffect(() => {
+    const prev = prevUsersRef.current;
+    const prevIds = new Set(prev.map((u) => u.userId));
+    const currIds = new Set(users.map((u) => u.userId));
+
+    // Joined
+    users.forEach((u) => {
+      if (!prevIds.has(u.userId) && u.userId !== currentUser?.userId) {
+        showToast({ message: `${u.username} joined the room`, type: 'join' });
+      }
+    });
+
+    // Left
+    prev.forEach((u) => {
+      if (!currIds.has(u.userId) && u.userId !== currentUser?.userId) {
+        showToast({ message: `${u.username} left the room`, type: 'leave' });
+      }
+    });
+
+    prevUsersRef.current = users;
+  }, [users, currentUser, showToast]);
+
+  // Toast when we ourselves join
+  useEffect(() => {
+    if (isJoined && !hasJoinedRef.current) {
+      hasJoinedRef.current = true;
+      showToast({ message: `You joined room ${roomId}`, type: 'info' });
+    }
+  }, [isJoined, roomId, showToast]);
+
+  // ─── Whiteboard ref for history replay ────────────────
+  const whiteboardRef = useRef(null);
+
+  useEffect(() => {
+    function onRoomJoined({ canvasHistory }) {
+      // Replay existing strokes once the canvas is ready
+      if (canvasHistory?.length && whiteboardRef.current?.replayHistory) {
+        // Small delay to ensure canvas resize has run first
+        setTimeout(() => {
+          whiteboardRef.current.replayHistory(canvasHistory);
+        }, 100);
+      }
+    }
+
+    socket.on('room:joined', onRoomJoined);
+    return () => socket.off('room:joined', onRoomJoined);
+  }, [socket]);
+
+  // ─── Handlers ─────────────────────────────────────────
   function handleCopyRoomId() {
     navigator.clipboard.writeText(roomId);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    showToast({ message: 'Room ID copied!', type: 'info' });
   }
 
   function handleLeave() {
@@ -86,7 +126,7 @@ export default function Room() {
             title="Copy Room ID"
           >
             <code>{roomId}</code>
-            <span className="copy-icon">{copied ? '✓' : '⎘'}</span>
+            <span className="copy-icon">⎘</span>
           </button>
         </div>
 
@@ -99,7 +139,10 @@ export default function Room() {
           <ul className="users-list">
             {users.map((user) => (
               <li key={user.userId} className="user-item">
-                <span className="user-avatar" style={{ background: user.color }}>
+                <span
+                  className="user-avatar"
+                  style={{ background: user.color }}
+                >
                   {user.username.charAt(0).toUpperCase()}
                 </span>
                 <span className="user-name">
@@ -108,13 +151,23 @@ export default function Room() {
                     <span className="you-badge">you</span>
                   )}
                 </span>
+                {/* Online indicator */}
+                <span className="user-online-dot" />
               </li>
             ))}
+
+            {users.length === 0 && (
+              <li className="users-empty">Connecting…</li>
+            )}
           </ul>
         </div>
 
         <div className="sidebar-footer">
-          <button id="leave-room-btn" className="btn btn-secondary btn-small btn-full" onClick={handleLeave}>
+          <button
+            id="leave-room-btn"
+            className="btn btn-secondary btn-small btn-full"
+            onClick={handleLeave}
+          >
             Leave Room
           </button>
         </div>
@@ -122,8 +175,11 @@ export default function Room() {
 
       {/* Canvas Area */}
       <main className="room-canvas-area">
-        <Whiteboard />
+        <Whiteboard ref={whiteboardRef} isJoined={isJoined} />
       </main>
+
+      {/* Toast notifications */}
+      <ToastContainer toasts={toasts} />
     </div>
   );
 }

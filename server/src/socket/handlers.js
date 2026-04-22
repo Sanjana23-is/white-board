@@ -23,15 +23,18 @@ export function registerSocketHandlers(io, socket, roomManager) {
     const user = roomManager.joinRoom(roomId, socket.id, { username });
     socket.join(roomId);
 
-    // Confirm to sender
+    // Confirm to sender — include canvas history for replay
     socket.emit('room:joined', {
       roomId,
       user,
       users: roomManager.getRoomUsers(roomId),
+      canvasHistory: roomManager.getCanvas(roomId),
     });
 
-    // Notify others
+    // Notify others in the room
     socket.to(roomId).emit('room:user-joined', { user });
+
+    logger.info(`room:join  ${user.username} → ${roomId}`);
   });
 
   socket.on('room:leave', () => {
@@ -46,7 +49,6 @@ export function registerSocketHandlers(io, socket, roomManager) {
     if (!roomId || !message) return;
 
     const user = roomManager.getRoomUsers(roomId).find(u => u.userId === socket.id);
-    // Broadcast to everyone in room including sender
     io.to(roomId).emit('room:message', {
       userId: socket.id,
       username: user?.username || 'Unknown',
@@ -60,30 +62,62 @@ export function registerSocketHandlers(io, socket, roomManager) {
   socket.on('cursor:move', ({ x, y }) => {
     const roomId = roomManager.findRoomBySocket(socket.id);
     if (!roomId) return;
-    // Volatile — tolerate drops for low latency
     socket.to(roomId).volatile.emit('cursor:update', {
       userId: socket.id, x, y,
     });
   });
 
-  // ─── Drawing Events (stubs for Phase 2) ─────────────────
+  // ─── Drawing Events ─────────────────────────────────────
 
-  socket.on('draw:start', (data) => {
+  socket.on('draw:start', ({ x, y, color, width }) => {
     const roomId = roomManager.findRoomBySocket(socket.id);
     if (!roomId) return;
-    socket.to(roomId).emit('draw:start', { ...data, userId: socket.id });
+
+    // Track in-progress stroke
+    roomManager.beginStroke(socket.id, { x, y, color, width });
+
+    // Broadcast to everyone else in the room
+    socket.to(roomId).emit('draw:start', {
+      userId: socket.id,
+      x, y, color, width,
+    });
   });
 
-  socket.on('draw:move', (data) => {
+  socket.on('draw:move', ({ x, y }) => {
     const roomId = roomManager.findRoomBySocket(socket.id);
     if (!roomId) return;
-    socket.to(roomId).volatile.emit('draw:move', { ...data, userId: socket.id });
+
+    // Append point to active stroke
+    roomManager.continueStroke(socket.id, { x, y });
+
+    // Volatile — drop if congested for low latency
+    socket.to(roomId).volatile.emit('draw:move', {
+      userId: socket.id, x, y,
+    });
   });
 
-  socket.on('draw:end', (data) => {
+  socket.on('draw:end', () => {
     const roomId = roomManager.findRoomBySocket(socket.id);
     if (!roomId) return;
-    socket.to(roomId).emit('draw:end', { ...data, userId: socket.id });
+
+    // Finalize and save to history
+    roomManager.endStroke(socket.id, roomId);
+
+    socket.to(roomId).emit('draw:end', { userId: socket.id });
+  });
+
+  // ─── Canvas Clear ─────────────────────────────────────
+
+  socket.on('canvas:clear', () => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId) return;
+
+    roomManager.clearCanvas(roomId);
+
+    // Broadcast clear to the entire room (including sender)
+    io.to(roomId).emit('canvas:clear');
+
+    logger.info(`canvas:clear in room ${roomId} by ${socket.id}`);
   });
 
   // ─── Disconnect ─────────────────────────────────────────
@@ -106,5 +140,6 @@ function leaveRoom(io, socket, roomManager, roomId) {
       username: user.username,
       users: roomManager.getRoomUsers(roomId),
     });
+    logger.info(`room:leave  ${user.username} ← ${roomId}`);
   }
 }

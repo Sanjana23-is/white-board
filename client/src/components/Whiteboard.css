@@ -3,6 +3,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
+  width: 100%;
 }
 
 /* ─── Toolbar ──────────────────────────────────────────── */
@@ -10,11 +12,12 @@
 .whiteboard-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 16px;
   padding: 10px 16px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .toolbar-title {
@@ -24,6 +27,83 @@
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text-secondary);
+  margin-right: auto;
+}
+
+/* ─── Color Swatches ───────────────────────────────────── */
+
+.toolbar-colors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.color-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+  outline: none;
+}
+
+.color-swatch:hover {
+  transform: scale(1.2);
+}
+
+.color-swatch.active {
+  border-color: white;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4), 0 0 8px rgba(255, 255, 255, 0.3);
+  transform: scale(1.15);
+}
+
+/* ─── Width Swatches ───────────────────────────────────── */
+
+.toolbar-widths {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.width-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 2px solid transparent;
+  cursor: pointer;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  outline: none;
+}
+
+.width-swatch:hover {
+  background: var(--bg-input-focus);
+}
+
+.width-swatch.active {
+  border-color: var(--border-focus);
+  background: rgba(168, 85, 247, 0.12);
+}
+
+.width-dot {
+  border-radius: 50%;
+  display: block;
+  min-width: 4px;
+  min-height: 4px;
+  transition: all var(--transition-fast);
 }
 
 /* ─── Canvas Container ─────────────────────────────────── */
@@ -45,7 +125,12 @@
   left: 0;
   width: 100%;
   height: 100%;
-  touch-action: none; /* Prevent scrolling while drawing on touch devices */
+  touch-action: none;
+  z-index: 1;
+}
+
+.whiteboard-canvas.drawing {
+  cursor: crosshair;
 }
 
 /* ─── Canvas Grid Pattern (subtle) ─────────────────────── */
@@ -59,8 +144,4 @@
   background-size: 24px 24px;
   pointer-events: none;
   z-index: 0;
-}
-
-.whiteboard-canvas {
-  z-index: 1;
 }
