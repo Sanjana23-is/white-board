@@ -39,6 +39,22 @@ export function registerSocketHandlers(io, socket, roomManager) {
     if (roomId) leaveRoom(io, socket, roomManager, roomId);
   });
 
+  // ─── Room Messages ──────────────────────────────────────
+
+  socket.on('room:message', ({ message }) => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId || !message) return;
+
+    const user = roomManager.getRoomUsers(roomId).find(u => u.userId === socket.id);
+    // Broadcast to everyone in room including sender
+    io.to(roomId).emit('room:message', {
+      userId: socket.id,
+      username: user?.username || 'Unknown',
+      message,
+      timestamp: Date.now(),
+    });
+  });
+
   // ─── Cursor Events ─────────────────────────────────────
 
   socket.on('cursor:move', ({ x, y }) => {

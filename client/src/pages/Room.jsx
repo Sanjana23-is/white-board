@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import ConnectionStatus from '../components/ConnectionStatus';
+import Whiteboard from '../components/Whiteboard';
 import './Room.css';
 
 export default function Room() {
@@ -121,18 +122,7 @@ export default function Room() {
 
       {/* Canvas Area */}
       <main className="room-canvas-area">
-        <div className="canvas-placeholder">
-          <div className="placeholder-content animate-float">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--accent-purple)' }}>
-              <path d="M12 19l7-7 3 3-7 7-3-3z" />
-              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
-              <path d="M2 2l7.586 7.586" />
-              <circle cx="11" cy="11" r="2" />
-            </svg>
-            <h2>Canvas Area</h2>
-            <p>Drawing tools coming in Phase 2</p>
-          </div>
-        </div>
+        <Whiteboard />
       </main>
     </div>
   );

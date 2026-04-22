@@ -1,0 +1,66 @@
+.whiteboard-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ─── Toolbar ──────────────────────────────────────────── */
+
+.whiteboard-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.toolbar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* ─── Canvas Container ─────────────────────────────────── */
+
+.canvas-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  cursor: crosshair;
+  background:
+    radial-gradient(circle at 30% 40%, rgba(168, 85, 247, 0.03) 0%, transparent 60%),
+    radial-gradient(circle at 70% 60%, rgba(6, 182, 212, 0.03) 0%, transparent 60%),
+    var(--bg-primary);
+}
+
+.whiteboard-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none; /* Prevent scrolling while drawing on touch devices */
+}
+
+/* ─── Canvas Grid Pattern (subtle) ─────────────────────── */
+
+.canvas-container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 24px 24px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.whiteboard-canvas {
+  z-index: 1;
+}
