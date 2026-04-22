@@ -1,39 +1,29 @@
 import logger from '../utils/logger.js';
 
-/**
- * Register all socket event handlers for a connected socket.
- * Handlers are thin — business logic lives in RoomManager.
- */
 export function registerSocketHandlers(io, socket, roomManager) {
 
-  // ─── Room Events ────────────────────────────────────────
+  // ─── Room ────────────────────────────────────────────
 
   socket.on('room:join', ({ roomId, username }) => {
     if (!roomId || typeof roomId !== 'string') {
       socket.emit('error:validation', { message: 'Invalid room ID' });
       return;
     }
-
-    // Leave any existing room first
     const currentRoom = roomManager.findRoomBySocket(socket.id);
-    if (currentRoom) {
-      leaveRoom(io, socket, roomManager, currentRoom);
-    }
+    if (currentRoom) leaveRoom(io, socket, roomManager, currentRoom);
 
     const user = roomManager.joinRoom(roomId, socket.id, { username });
     socket.join(roomId);
 
-    // Confirm to sender — include canvas history for replay
     socket.emit('room:joined', {
       roomId,
       user,
-      users: roomManager.getRoomUsers(roomId),
+      users:         roomManager.getRoomUsers(roomId),
       canvasHistory: roomManager.getCanvas(roomId),
+      notes:         roomManager.getNotes(roomId),
     });
 
-    // Notify others in the room
     socket.to(roomId).emit('room:user-joined', { user });
-
     logger.info(`room:join  ${user.username} → ${roomId}`);
   });
 
@@ -42,12 +32,9 @@ export function registerSocketHandlers(io, socket, roomManager) {
     if (roomId) leaveRoom(io, socket, roomManager, roomId);
   });
 
-  // ─── Room Messages ──────────────────────────────────────
-
   socket.on('room:message', ({ message }) => {
     const roomId = roomManager.findRoomBySocket(socket.id);
     if (!roomId || !message) return;
-
     const user = roomManager.getRoomUsers(roomId).find(u => u.userId === socket.id);
     io.to(roomId).emit('room:message', {
       userId: socket.id,
@@ -57,70 +44,110 @@ export function registerSocketHandlers(io, socket, roomManager) {
     });
   });
 
-  // ─── Cursor Events ─────────────────────────────────────
+  // ─── Cursor ───────────────────────────────────────────
 
   socket.on('cursor:move', ({ x, y }) => {
     const roomId = roomManager.findRoomBySocket(socket.id);
     if (!roomId) return;
-    socket.to(roomId).volatile.emit('cursor:update', {
-      userId: socket.id, x, y,
-    });
+    socket.to(roomId).volatile.emit('cursor:update', { userId: socket.id, x, y });
   });
 
-  // ─── Drawing Events ─────────────────────────────────────
+  // ─── Drawing ──────────────────────────────────────────
 
   socket.on('draw:start', ({ x, y, color, width }) => {
     const roomId = roomManager.findRoomBySocket(socket.id);
     if (!roomId) return;
-
-    // Track in-progress stroke
     roomManager.beginStroke(socket.id, { x, y, color, width });
-
-    // Broadcast to everyone else in the room
-    socket.to(roomId).emit('draw:start', {
-      userId: socket.id,
-      x, y, color, width,
-    });
+    socket.to(roomId).emit('draw:start', { userId: socket.id, x, y, color, width });
   });
 
   socket.on('draw:move', ({ x, y }) => {
     const roomId = roomManager.findRoomBySocket(socket.id);
     if (!roomId) return;
-
-    // Append point to active stroke
     roomManager.continueStroke(socket.id, { x, y });
-
-    // Volatile — drop if congested for low latency
-    socket.to(roomId).volatile.emit('draw:move', {
-      userId: socket.id, x, y,
-    });
+    socket.to(roomId).volatile.emit('draw:move', { userId: socket.id, x, y });
   });
 
   socket.on('draw:end', () => {
     const roomId = roomManager.findRoomBySocket(socket.id);
     if (!roomId) return;
-
-    // Finalize and save to history
     roomManager.endStroke(socket.id, roomId);
-
     socket.to(roomId).emit('draw:end', { userId: socket.id });
   });
-
-  // ─── Canvas Clear ─────────────────────────────────────
 
   socket.on('canvas:clear', () => {
     const roomId = roomManager.findRoomBySocket(socket.id);
     if (!roomId) return;
-
     roomManager.clearCanvas(roomId);
-
-    // Broadcast clear to the entire room (including sender)
     io.to(roomId).emit('canvas:clear');
-
-    logger.info(`canvas:clear in room ${roomId} by ${socket.id}`);
+    logger.info(`canvas:clear in room ${roomId}`);
   });
 
-  // ─── Disconnect ─────────────────────────────────────────
+  // ─── WebRTC signaling relay ───────────────────────────
+
+  socket.on('webrtc:join-video', () => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId) return;
+    const existingPeers = roomManager.joinVideo(roomId, socket.id);
+    // Tell caller who is already in video
+    socket.emit('webrtc:video-peers', { peers: existingPeers });
+    // Notify others that this peer started video
+    socket.to(roomId).emit('webrtc:peer-joined-video', { peerId: socket.id });
+    logger.info(`webrtc:join-video ${socket.id} in ${roomId}`);
+  });
+
+  socket.on('webrtc:leave-video', () => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId) return;
+    roomManager.leaveVideo(roomId, socket.id);
+    socket.to(roomId).emit('webrtc:peer-left-video', { peerId: socket.id });
+  });
+
+  // Pure relay — server never inspects SDP/ICE
+  socket.on('webrtc:offer', ({ to, offer }) => {
+    socket.to(to).emit('webrtc:offer', { from: socket.id, offer });
+  });
+
+  socket.on('webrtc:answer', ({ to, answer }) => {
+    socket.to(to).emit('webrtc:answer', { from: socket.id, answer });
+  });
+
+  socket.on('webrtc:ice-candidate', ({ to, candidate }) => {
+    socket.to(to).emit('webrtc:ice-candidate', { from: socket.id, candidate });
+  });
+
+  // ─── Sticky notes ─────────────────────────────────────
+
+  socket.on('note:create', ({ note }) => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId || !note) return;
+    const saved = roomManager.addNote(roomId, { ...note, userId: socket.id });
+    io.to(roomId).emit('note:created', { note: saved });
+  });
+
+  socket.on('note:move', ({ id, x, y }) => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId) return;
+    roomManager.updateNote(roomId, id, { x, y });
+    // Volatile — tolerate drops for smooth drag sync
+    socket.to(roomId).volatile.emit('note:moved', { id, x, y });
+  });
+
+  socket.on('note:update', ({ id, text }) => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId) return;
+    roomManager.updateNote(roomId, id, { text });
+    io.to(roomId).emit('note:updated', { id, text });
+  });
+
+  socket.on('note:delete', ({ id }) => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId) return;
+    roomManager.deleteNote(roomId, id);
+    io.to(roomId).emit('note:deleted', { id });
+  });
+
+  // ─── Disconnect ───────────────────────────────────────
 
   socket.on('disconnect', (reason) => {
     logger.info(`Disconnected: ${socket.id} (${reason})`);
@@ -129,11 +156,9 @@ export function registerSocketHandlers(io, socket, roomManager) {
   });
 }
 
-/** Handle leaving a room — extracted for reuse. */
 function leaveRoom(io, socket, roomManager, roomId) {
   const user = roomManager.leaveRoom(roomId, socket.id);
   socket.leave(roomId);
-
   if (user) {
     io.to(roomId).emit('room:user-left', {
       userId: socket.id,

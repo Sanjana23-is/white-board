@@ -2,7 +2,9 @@ import { useRef, useState, useEffect, useCallback, useContext, forwardRef, useIm
 import { SocketContext } from '../context/SocketContext';
 import { useDrawing } from '../hooks/useDrawing';
 import { useCursor } from '../hooks/useCursor';
+import { useNotes } from '../hooks/useNotes';
 import RemoteCursors from './RemoteCursors';
+import StickyNotes from './StickyNotes';
 import './Whiteboard.css';
 
 const COLORS = [
@@ -20,7 +22,7 @@ const WIDTHS = [2, 4, 8, 14];
  *   isJoined   {boolean}  Whether socket room has been joined
  *   onClearBroadcast {fn} Called when the user clicks Clear (lets parent emit canvas:clear)
  */
-const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = [] }, ref) {
+const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = [], initialNotes = [] }, ref) {
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -42,9 +44,11 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
   const { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, replayHistory } =
     useDrawing(socket, canvasRef, ctxRef, toolState, isJoined);
 
-  // Cursor tracking
   const { remoteCursors, emitCursorMove, emitCursorHide } =
     useCursor(socket, isJoined, users);
+
+  const { notes, createNote, moveNote, updateNote, deleteNote } =
+    useNotes(socket, isJoined, initialNotes);
 
   // ─── Canvas Setup ─────────────────────────────────────
   useEffect(() => {
@@ -175,6 +179,14 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
     draw(e); // forward to drawing handler
   }, [getPosition, emitCursorMove, draw]);
 
+  /** Add a sticky note at the centre of the canvas */
+  const handleAddNote = useCallback(() => {
+    const canvas = canvasRef.current;
+    const cx = canvas ? canvas.width  / 2 - 90 : 100;
+    const cy = canvas ? canvas.height / 2 - 70 : 100;
+    createNote(cx, cy);
+  }, [canvasRef, createNote]);
+
   // ─── Clear ────────────────────────────────────────────
   const handleClear = useCallback(() => {
     const canvas = canvasRef.current;
@@ -232,6 +244,21 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
           ))}
         </div>
 
+        {/* Add Note */}
+        <button
+          id="add-note-btn"
+          className="btn btn-secondary btn-small"
+          onClick={handleAddNote}
+          title="Add sticky note"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          Note
+        </button>
+
+        {/* Clear canvas */}
         <button
           id="clear-canvas-btn"
           className="btn btn-secondary btn-small"
@@ -260,8 +287,13 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
           onTouchMove={draw}
           onTouchEnd={stopDrawing}
         />
-        {/* Remote cursors overlay */}
         <RemoteCursors cursors={remoteCursors} />
+        <StickyNotes
+          notes={notes}
+          onMove={moveNote}
+          onUpdate={updateNote}
+          onDelete={deleteNote}
+        />
       </div>
     </div>
   );

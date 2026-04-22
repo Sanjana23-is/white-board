@@ -1,34 +1,24 @@
+import { v4 as uuidv4 } from 'uuid';
 import logger from '../utils/logger.js';
 
-/**
- * In-memory room and user state manager.
- * Designed to be swappable with a Redis-backed implementation later.
- */
 class RoomManager {
   constructor() {
-    /** @type {Map<string, Map<string, object>>} roomId → Map<socketId, userData> */
-    this.rooms = new Map();
-
-    /**
-     * Canvas history per room: roomId → stroke[]
-     * Each stroke: { type: 'start'|'move'|'end', x, y, color, width, userId }
-     * We store only completed strokes (start + points + end) as segments.
-     * Format: { color, width, points: [{x,y}] }
-     */
-    this.canvasHistory = new Map();
-
-    /** Temporary in-progress strokes: socketId → { color, width, points[] } */
-    this.activeStrokes = new Map();
+    this.rooms           = new Map(); // roomId → Map<socketId, userData>
+    this.canvasHistory   = new Map(); // roomId → stroke[]
+    this.activeStrokes   = new Map(); // socketId → stroke in progress
+    this.videoParticipants = new Map(); // roomId → Set<socketId>
+    this.notes           = new Map(); // roomId → Map<noteId, note>
   }
 
-  /** Add user to a room (auto-creates room if needed). */
+  // ─── Room membership ───────────────────────────────────
+
   joinRoom(roomId, socketId, { username } = {}) {
     if (!this.rooms.has(roomId)) {
       this.rooms.set(roomId, new Map());
       this.canvasHistory.set(roomId, []);
+      this.notes.set(roomId, new Map());
       logger.info(`Room created: ${roomId}`);
     }
-
     const room = this.rooms.get(roomId);
     const user = {
       userId: socketId,
@@ -36,32 +26,29 @@ class RoomManager {
       color: this._assignColor(room.size),
       joinedAt: Date.now(),
     };
-
     room.set(socketId, user);
     logger.info(`${user.username} joined room ${roomId} (${room.size} users)`);
     return user;
   }
 
-  /** Remove user from a room. Deletes room if empty. */
   leaveRoom(roomId, socketId) {
     const room = this.rooms.get(roomId);
     if (!room) return null;
-
     const user = room.get(socketId);
     room.delete(socketId);
-
-    // Clean up any active stroke
     this.activeStrokes.delete(socketId);
+    this.leaveVideo(roomId, socketId);
 
     if (room.size === 0) {
       this.rooms.delete(roomId);
       this.canvasHistory.delete(roomId);
+      this.notes.delete(roomId);
+      this.videoParticipants.delete(roomId);
       logger.info(`Room ${roomId} deleted (empty)`);
     }
     return user || null;
   }
 
-  /** Find which room a socket belongs to. */
   findRoomBySocket(socketId) {
     for (const [roomId, users] of this.rooms) {
       if (users.has(socketId)) return roomId;
@@ -69,64 +56,91 @@ class RoomManager {
     return null;
   }
 
-  /** Get all users in a room as an array. */
   getRoomUsers(roomId) {
     const room = this.rooms.get(roomId);
     return room ? Array.from(room.values()) : [];
   }
 
-  // ─── Canvas History ─────────────────────────────────────
+  // ─── Canvas history ────────────────────────────────────
 
-  /** Begin tracking a new stroke for a socket. */
   beginStroke(socketId, { x, y, color, width }) {
     this.activeStrokes.set(socketId, { color, width, points: [{ x, y }] });
   }
 
-  /** Append a point to the active stroke. */
   continueStroke(socketId, { x, y }) {
     const stroke = this.activeStrokes.get(socketId);
     if (stroke) stroke.points.push({ x, y });
   }
 
-  /** Finalize the stroke and save to room history. */
   endStroke(socketId, roomId) {
     const stroke = this.activeStrokes.get(socketId);
     this.activeStrokes.delete(socketId);
     if (!stroke || !roomId) return;
-
     const history = this.canvasHistory.get(roomId);
     if (history) {
       history.push(stroke);
-      // Cap history at 500 strokes to avoid unbounded memory
       if (history.length > 500) history.shift();
     }
   }
 
-  /** Return the full canvas history for a room (for late-joiner replay). */
   getCanvas(roomId) {
     return this.canvasHistory.get(roomId) || [];
   }
 
-  /** Clear canvas for a room. */
   clearCanvas(roomId) {
     this.canvasHistory.set(roomId, []);
-    // Clear any in-flight strokes for this room
     const room = this.rooms.get(roomId);
-    if (room) {
-      for (const socketId of room.keys()) {
-        this.activeStrokes.delete(socketId);
-      }
-    }
+    if (room) for (const sid of room.keys()) this.activeStrokes.delete(sid);
   }
 
-  /** Aggregate stats for health endpoint. */
+  // ─── Video participants ────────────────────────────────
+
+  /** Returns list of existing video participants (excluding the joiner). */
+  joinVideo(roomId, socketId) {
+    if (!this.videoParticipants.has(roomId)) {
+      this.videoParticipants.set(roomId, new Set());
+    }
+    const set = this.videoParticipants.get(roomId);
+    const existing = Array.from(set).filter(id => id !== socketId);
+    set.add(socketId);
+    return existing;
+  }
+
+  leaveVideo(roomId, socketId) {
+    this.videoParticipants.get(roomId)?.delete(socketId);
+  }
+
+  // ─── Sticky notes ──────────────────────────────────────
+
+  addNote(roomId, note) {
+    const id = note.id || uuidv4().slice(0, 8);
+    const full = { ...note, id, createdAt: Date.now() };
+    this.notes.get(roomId)?.set(id, full);
+    return full;
+  }
+
+  updateNote(roomId, id, updates) {
+    const note = this.notes.get(roomId)?.get(id);
+    if (note) Object.assign(note, updates);
+  }
+
+  deleteNote(roomId, id) {
+    this.notes.get(roomId)?.delete(id);
+  }
+
+  getNotes(roomId) {
+    const m = this.notes.get(roomId);
+    return m ? Array.from(m.values()) : [];
+  }
+
+  // ─── Stats ────────────────────────────────────────────
+
   getStats() {
     let users = 0;
     for (const room of this.rooms.values()) users += room.size;
     return { rooms: this.rooms.size, users };
   }
 
-  /** Assign a visually distinct color based on join order. */
   _assignColor(index) {
     const palette = [
       '#a855f7', '#06b6d4', '#f97316', '#10b981',

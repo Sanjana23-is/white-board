@@ -111,7 +111,6 @@
 .canvas-container {
   flex: 1;
   position: relative;
-  overflow: hidden;
   cursor: crosshair;
   background:
     radial-gradient(circle at 30% 40%, rgba(168, 85, 247, 0.03) 0%, transparent 60%),

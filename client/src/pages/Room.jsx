@@ -1,10 +1,12 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import { useRoom } from '../hooks/useRoom';
+import { useWebRTC } from '../hooks/useWebRTC';
 import { useToasts, ToastContainer } from '../components/Toast';
 import ConnectionStatus from '../components/ConnectionStatus';
 import Whiteboard from '../components/Whiteboard';
+import VideoPanel from '../components/VideoPanel';
 import './Room.css';
 
 export default function Room() {
@@ -18,12 +20,17 @@ export default function Room() {
   // ─── Room membership ─────────────────────────────────
   const { currentUser, users, isJoined, joinRoom } = useRoom(socket, roomId, username);
 
+  // ─── WebRTC video calling ─────────────────────────────
+  const { localStream, peers, isVideoOn, videoError, startVideo, stopVideo } =
+    useWebRTC(socket, isJoined, users);
+
   // ─── Toast notifications ──────────────────────────────
   const { toasts, showToast } = useToasts();
 
   // Track previous users list to detect changes
   const prevUsersRef = useRef([]);
   const hasJoinedRef = useRef(false);
+  const [initialNotes, setInitialNotes] = useState([]);
 
   // ─── Connect socket & join room on mount ──────────────
   useEffect(() => {
@@ -83,14 +90,13 @@ export default function Room() {
   const whiteboardRef = useRef(null);
 
   useEffect(() => {
-    function onRoomJoined({ canvasHistory }) {
-      // Replay existing strokes once the canvas is ready
+    function onRoomJoined({ canvasHistory, notes }) {
+      // Replay canvas
       if (canvasHistory?.length && whiteboardRef.current?.replayHistory) {
-        // Small delay to ensure canvas resize has run first
-        setTimeout(() => {
-          whiteboardRef.current.replayHistory(canvasHistory);
-        }, 100);
+        setTimeout(() => whiteboardRef.current.replayHistory(canvasHistory), 100);
       }
+      // Init sticky notes
+      if (notes?.length) setInitialNotes(notes);
     }
 
     socket.on('room:joined', onRoomJoined);
@@ -175,7 +181,21 @@ export default function Room() {
 
       {/* Canvas Area */}
       <main className="room-canvas-area">
-        <Whiteboard ref={whiteboardRef} isJoined={isJoined} users={users} />
+        <Whiteboard
+          ref={whiteboardRef}
+          isJoined={isJoined}
+          users={users}
+          initialNotes={initialNotes}
+        />
+        {/* Floating video panel */}
+        <VideoPanel
+          localStream={localStream}
+          peers={peers}
+          isVideoOn={isVideoOn}
+          videoError={videoError}
+          onStart={startVideo}
+          onStop={stopVideo}
+        />
       </main>
 
       {/* Toast notifications */}

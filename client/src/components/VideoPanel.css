@@ -1,0 +1,145 @@
+/* ─── Panel wrapper ─────────────────────────────────────── */
+
+.video-panel {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  z-index: 50;
+  width: 260px;
+  background: rgba(10, 14, 26, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg), 0 0 30px rgba(168, 85, 247, 0.1);
+  overflow: hidden;
+  transition: all var(--transition-base);
+}
+
+.video-panel--active {
+  width: 300px;
+}
+
+/* ─── Header ────────────────────────────────────────────── */
+
+.video-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.video-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* ─── Danger button variant ─────────────────────────────── */
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+/* ─── Video grid ────────────────────────────────────────── */
+
+.video-grid {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
+.video-grid--1 { grid-template-columns: 1fr; }
+.video-grid--2 { grid-template-columns: 1fr 1fr; }
+.video-grid--3 { grid-template-columns: 1fr 1fr; }
+.video-grid--4 { grid-template-columns: 1fr 1fr; }
+
+/* ─── Individual video tile ─────────────────────────────── */
+
+.video-tile {
+  position: relative;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-secondary);
+  aspect-ratio: 4/3;
+  border: 1px solid var(--border);
+}
+
+.video-tile--local {
+  border-color: rgba(168, 85, 247, 0.3);
+}
+
+.video-el {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transform: scaleX(-1); /* Mirror local video */
+}
+
+.video-tile:not(.video-tile--local) .video-el {
+  transform: none;
+}
+
+/* ─── Placeholder when no stream ────────────────────────── */
+
+.video-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary);
+}
+
+.video-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--gradient-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: white;
+}
+
+/* ─── Name label ────────────────────────────────────────── */
+
+.video-label {
+  position: absolute;
+  bottom: 5px;
+  left: 6px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: white;
+  background: rgba(0,0,0,0.5);
+  padding: 1px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* ─── States ────────────────────────────────────────────── */
+
+.video-empty,
+.video-error {
+  font-size: 0.75rem;
+  text-align: center;
+  padding: 12px 14px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.video-error {
+  color: var(--accent-red);
+}
