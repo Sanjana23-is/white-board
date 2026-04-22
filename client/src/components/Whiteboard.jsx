@@ -26,6 +26,10 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
   const [isDrawing, setIsDrawing] = useState(false);
   const lastPos = useRef({ x: 0, y: 0 });
 
+  // RAF queue for local rendering — prevents multiple strokes per frame
+  const localQueue = useRef([]);
+  const localRafId = useRef(null);
+
   // Tool state — kept in a ref so useDrawing can read current values without re-render
   const [color, setColor] = useState('#a855f7');
   const [width, setWidth] = useState(4);
@@ -71,7 +75,11 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
 
     resize();
     window.addEventListener('resize', resize);
-    return () => window.removeEventListener('resize', resize);
+    return () => {
+      window.removeEventListener('resize', resize);
+      // Cancel any pending RAF on unmount
+      if (localRafId.current) cancelAnimationFrame(localRafId.current);
+    };
   }, []);
 
   // Expose replayHistory so Room.jsx can call it after room:joined
@@ -87,6 +95,26 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
   }, []);
 
   // ─── Drawing Handlers ─────────────────────────────────
+
+  /** Flush all queued line segments in one RAF tick */
+  const flushLocalQueue = useCallback(() => {
+    localRafId.current = null;
+    const ctx = ctxRef.current;
+    if (!ctx) return;
+
+    const segments = localQueue.current.splice(0);
+    for (const { from, to, color, width } of segments) {
+      ctx.lineCap    = 'round';
+      ctx.lineJoin   = 'round';
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = width;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+    }
+  }, []);
+
   const startDrawing = useCallback((e) => {
     e.preventDefault();
     const pos = getPosition(e);
@@ -94,10 +122,12 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
     setIsDrawing(true);
 
     const ctx = ctxRef.current;
+    ctx.lineCap    = 'round';
+    ctx.lineJoin   = 'round';
     ctx.strokeStyle = toolState.current.color;
     ctx.lineWidth   = toolState.current.width;
 
-    // Draw a dot for single clicks
+    // Draw a dot for single clicks — immediate, not batched
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, toolState.current.width / 2, 0, Math.PI * 2);
     ctx.fillStyle = toolState.current.color;
@@ -110,21 +140,27 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
     if (!isDrawing) return;
     e.preventDefault();
 
-    const ctx = ctxRef.current;
     const currentPos = getPosition(e);
+    const { color, width } = toolState.current;
 
-    ctx.strokeStyle = toolState.current.color;
-    ctx.lineWidth   = toolState.current.width;
-    ctx.beginPath();
-    ctx.moveTo(lastPos.current.x, lastPos.current.y);
-    ctx.lineTo(currentPos.x, currentPos.y);
-    ctx.stroke();
+    // Queue segment for RAF rendering — snapshot style at event time
+    localQueue.current.push({
+      from: { ...lastPos.current },
+      to:   currentPos,
+      color,
+      width,
+    });
+
+    // Schedule a single flush per frame
+    if (!localRafId.current) {
+      localRafId.current = requestAnimationFrame(flushLocalQueue);
+    }
 
     if (isJoined) emitDrawMove(currentPos.x, currentPos.y);
     // Also update cursor position while drawing
     emitCursorMove(currentPos.x, currentPos.y);
     lastPos.current = currentPos;
-  }, [isDrawing, getPosition, isJoined, emitDrawMove, emitCursorMove]);
+  }, [isDrawing, getPosition, toolState, isJoined, emitDrawMove, emitCursorMove, flushLocalQueue]);
 
   const stopDrawing = useCallback(() => {
     if (!isDrawing) return;

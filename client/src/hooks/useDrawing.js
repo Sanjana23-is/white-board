@@ -1,50 +1,42 @@
 import { useCallback, useEffect, useRef } from 'react';
 
+// ─── Emission thresholds ───────────────────────────────────
+const MIN_DISTANCE_SQ = 9;   // Only emit if cursor moved ≥ 3px  (3² = 9)
+const MIN_EMIT_MS     = 14;  // Cap at ~70fps regardless of screen refresh rate
+
 /**
- * Bidirectional drawing over Socket.io.
+ * Bidirectional drawing over Socket.io — optimized edition.
  *
- * Outbound: local pointer events → emit draw:start/move/end + canvas:clear
- * Inbound:  remote draw:* / canvas:clear events → render on the shared canvas
- * Replay:   canvas history array from room:joined → render existing strokes
+ * Outbound:
+ *   - draw:start / draw:end  → reliable emit (stroke boundary events)
+ *   - draw:move              → volatile emit, gated by distance + time throttle
+ *   - canvas:clear           → reliable emit
+ *
+ * Inbound:
+ *   - Remote draw events are queued and flushed via requestAnimationFrame
+ *     so they never block the input thread.
+ *
+ * Replay:
+ *   - canvasHistory strokes from room:joined are rendered synchronously
+ *     (one-shot, no need for RAF).
  */
 export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
 
-  /**
-   * Per-remote-user stroke state:
-   *   socketId → { x, y, color, width }
-   * Stored so draw:move can use the correct style set during draw:start.
-   */
+  // Per-remote-user stroke state: socketId → { x, y, color, width }
   const remoteStroke = useRef({});
 
-  // ─── Outbound helpers ──────────────────────────────────
+  // RAF queue for remote draw events
+  const remoteQueue = useRef([]);
+  const remoteRafId = useRef(null);
 
-  const emitDrawStart = useCallback((x, y) => {
-    socket.emit('draw:start', {
-      x, y,
-      color: toolState.current.color,
-      width: toolState.current.width,
-    });
-  }, [socket, toolState]);
+  // Outbound throttle state
+  const lastEmitPos  = useRef(null);
+  const lastEmitTime = useRef(0);
 
-  const emitDrawMove = useCallback((x, y) => {
-    socket.emit('draw:move', { x, y });
-  }, [socket]);
+  // ─── Remote rendering helpers ──────────────────────────
 
-  const emitDrawEnd = useCallback(() => {
-    socket.emit('draw:end');
-  }, [socket]);
-
-  const emitClear = useCallback(() => {
-    socket.emit('canvas:clear');
-  }, [socket]);
-
-  // ─── Canvas rendering helpers ──────────────────────────
-
-  function applyRemoteStart(ctx, { userId, x, y, color, width }) {
-    // Store style for this user's stroke
+  function _applyStart(ctx, { userId, x, y, color, width }) {
     remoteStroke.current[userId] = { x, y, color: color || '#a855f7', width: width || 3 };
-
-    // Draw a dot for single-tap strokes
     ctx.save();
     ctx.beginPath();
     ctx.arc(x, y, (width || 3) / 2, 0, Math.PI * 2);
@@ -53,10 +45,9 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
     ctx.restore();
   }
 
-  function applyRemoteMove(ctx, { userId, x, y }) {
+  function _applyMove(ctx, { userId, x, y }) {
     const state = remoteStroke.current[userId];
     if (!state) return;
-
     ctx.save();
     ctx.lineCap    = 'round';
     ctx.lineJoin   = 'round';
@@ -67,26 +58,86 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
     ctx.lineTo(x, y);
     ctx.stroke();
     ctx.restore();
-
-    // Update last position
     remoteStroke.current[userId] = { ...state, x, y };
   }
 
-  function applyRemoteEnd(userId) {
+  function _applyEnd(userId) {
     delete remoteStroke.current[userId];
   }
 
-  function clearCanvas() {
-    const canvas = canvasRef.current;
-    const ctx    = ctxRef.current;
-    if (canvas && ctx) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // ─── RAF flush — processes the remote event queue ──────
+  function flushRemoteQueue() {
+    remoteRafId.current = null;
+    const ctx = ctxRef.current;
+    if (!ctx) return;
+
+    // Drain the queue (grab all pending events atomically)
+    const events = remoteQueue.current.splice(0);
+    for (const ev of events) {
+      switch (ev.type) {
+        case 'start': _applyStart(ctx, ev.data); break;
+        case 'move':  _applyMove(ctx, ev.data);  break;
+        case 'end':   _applyEnd(ev.data.userId);  break;
+        case 'clear': {
+          const canvas = canvasRef.current;
+          if (canvas) ctx.clearRect(0, 0, canvas.width, canvas.height);
+          remoteStroke.current = {};
+          break;
+        }
+      }
     }
-    remoteStroke.current = {};
   }
 
-  // ─── Replay canvas history (late-joiner) ──────────────
+  function scheduleFlush() {
+    if (!remoteRafId.current) {
+      remoteRafId.current = requestAnimationFrame(flushRemoteQueue);
+    }
+  }
 
+  // ─── Outbound emit helpers ─────────────────────────────
+
+  const emitDrawStart = useCallback((x, y) => {
+    // Reset throttle state for the new stroke
+    lastEmitPos.current  = { x, y };
+    lastEmitTime.current = Date.now();
+    socket.emit('draw:start', {
+      x, y,
+      color: toolState.current.color,
+      width: toolState.current.width,
+    });
+  }, [socket, toolState]);
+
+  const emitDrawMove = useCallback((x, y) => {
+    // ① Distance gate — skip if cursor hasn't moved 3px
+    const last = lastEmitPos.current;
+    if (last) {
+      const dx = x - last.x;
+      const dy = y - last.y;
+      if (dx * dx + dy * dy < MIN_DISTANCE_SQ) return;
+    }
+
+    // ② Time gate — cap at ~70fps
+    const now = Date.now();
+    if (now - lastEmitTime.current < MIN_EMIT_MS) return;
+
+    lastEmitPos.current  = { x, y };
+    lastEmitTime.current = now;
+
+    // Volatile: okay to drop mid-stroke packets if the network is congested
+    socket.volatile.emit('draw:move', { x, y });
+  }, [socket]);
+
+  const emitDrawEnd = useCallback(() => {
+    lastEmitPos.current = null;
+    socket.emit('draw:end');
+  }, [socket]);
+
+  const emitClear = useCallback(() => {
+    socket.emit('canvas:clear');
+  }, [socket]);
+
+  // ─── Replay canvas history (late-joiner) ──────────────
+  // Rendered synchronously — one-shot, no need for RAF.
   const replayHistory = useCallback((history) => {
     const ctx = ctxRef.current;
     if (!ctx || !history?.length) return;
@@ -102,7 +153,6 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
       ctx.lineWidth   = width || 3;
 
       if (points.length === 1) {
-        // Single-point stroke → dot
         ctx.beginPath();
         ctx.arc(points[0].x, points[0].y, (width || 3) / 2, 0, Math.PI * 2);
         ctx.fillStyle = color || '#a855f7';
@@ -119,45 +169,35 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
     }
   }, [ctxRef]);
 
-  // ─── Inbound Socket Listeners ──────────────────────────
-
+  // ─── Inbound socket listeners ──────────────────────────
   useEffect(() => {
     if (!isJoined) return;
 
-    function onRemoteStart(data) {
-      const ctx = ctxRef.current;
-      if (ctx) applyRemoteStart(ctx, data);
-    }
-    function onRemoteMove(data) {
-      const ctx = ctxRef.current;
-      if (ctx) applyRemoteMove(ctx, data);
-    }
-    function onRemoteEnd({ userId }) {
-      applyRemoteEnd(userId);
-    }
-    function onClear() {
-      clearCanvas();
-    }
+    // Push to queue and schedule a RAF flush
+    const onStart = (data) => { remoteQueue.current.push({ type: 'start', data }); scheduleFlush(); };
+    const onMove  = (data) => { remoteQueue.current.push({ type: 'move',  data }); scheduleFlush(); };
+    const onEnd   = (data) => { remoteQueue.current.push({ type: 'end',   data }); scheduleFlush(); };
+    const onClear = ()     => { remoteQueue.current.push({ type: 'clear'       }); scheduleFlush(); };
 
-    socket.on('draw:start', onRemoteStart);
-    socket.on('draw:move',  onRemoteMove);
-    socket.on('draw:end',   onRemoteEnd);
+    socket.on('draw:start',   onStart);
+    socket.on('draw:move',    onMove);
+    socket.on('draw:end',     onEnd);
     socket.on('canvas:clear', onClear);
 
     return () => {
-      socket.off('draw:start', onRemoteStart);
-      socket.off('draw:move',  onRemoteMove);
-      socket.off('draw:end',   onRemoteEnd);
+      socket.off('draw:start',   onStart);
+      socket.off('draw:move',    onMove);
+      socket.off('draw:end',     onEnd);
       socket.off('canvas:clear', onClear);
+
+      // Cancel any pending RAF on cleanup
+      if (remoteRafId.current) {
+        cancelAnimationFrame(remoteRafId.current);
+        remoteRafId.current = null;
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket, isJoined, ctxRef]);
+  }, [socket, isJoined, ctxRef, canvasRef]);
 
-  return {
-    emitDrawStart,
-    emitDrawMove,
-    emitDrawEnd,
-    emitClear,
-    replayHistory,
-  };
+  return { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, replayHistory };
 }
