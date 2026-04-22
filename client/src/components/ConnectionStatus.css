@@ -1,0 +1,36 @@
+.connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: all var(--transition-base);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background var(--transition-base);
+}
+
+/* States */
+.status--idle .status-dot         { background: var(--text-muted); }
+.status--idle .status-label       { color: var(--text-muted); }
+
+.status--connecting .status-dot   { background: var(--accent-amber); animation: pulse 1.2s ease-in-out infinite; }
+.status--connecting .status-label { color: var(--accent-amber); }
+
+.status--connected .status-dot    { background: var(--accent-green); }
+.status--connected .status-label  { color: var(--accent-green); }
+
+.status--disconnected .status-dot   { background: var(--text-muted); }
+.status--disconnected .status-label { color: var(--text-secondary); }
+
+.status--error .status-dot        { background: var(--accent-red); animation: pulse 1s ease-in-out infinite; }
+.status--error .status-label      { color: var(--accent-red); }
