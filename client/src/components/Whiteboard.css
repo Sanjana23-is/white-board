@@ -29,6 +29,13 @@
   border-left: 1px solid var(--border);
 }
 
+/* Active tool mode highlight */
+.btn.active-mode {
+  background: rgba(168, 85, 247, 0.2);
+  border-color: rgba(168, 85, 247, 0.6);
+  color: var(--text-primary);
+}
+
 .toolbar-title {
   display: flex;
   align-items: center;

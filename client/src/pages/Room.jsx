@@ -3,10 +3,12 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import { useRoom } from '../hooks/useRoom';
 import { useWebRTC } from '../hooks/useWebRTC';
+import { useChat } from '../hooks/useChat';
 import { useToasts, ToastContainer } from '../components/Toast';
 import ConnectionStatus from '../components/ConnectionStatus';
 import Whiteboard from '../components/Whiteboard';
 import VideoPanel from '../components/VideoPanel';
+import ChatPanel from '../components/ChatPanel';
 import './Room.css';
 
 export default function Room() {
@@ -23,6 +25,10 @@ export default function Room() {
   // ─── WebRTC video calling ─────────────────────────────
   const { localStream, peers, isVideoOn, videoError, startVideo, stopVideo } =
     useWebRTC(socket, isJoined, users);
+
+  // ─── Chat ───────────────────────────────────────
+  const { messages, unread, isOpen: isChatOpen, toggle: toggleChat, sendMessage } =
+    useChat(socket, isJoined);
 
   // ─── Toast notifications ──────────────────────────────
   const { toasts, showToast } = useToasts();
@@ -169,6 +175,16 @@ export default function Room() {
         </div>
 
         <div className="sidebar-footer">
+          {/* Chat toggle */}
+          <button
+            id="chat-toggle-btn"
+            className={`btn btn-small btn-full${isChatOpen ? ' btn-primary' : ' btn-secondary'}`}
+            onClick={toggleChat}
+          >
+            💬 Chat
+            {unread > 0 && <span className="chat-badge">{unread}</span>}
+          </button>
+
           <button
             id="leave-room-btn"
             className="btn btn-secondary btn-small btn-full"
@@ -196,6 +212,15 @@ export default function Room() {
           onStart={startVideo}
           onStop={stopVideo}
         />
+        {/* Floating chat panel */}
+        {isChatOpen && (
+          <ChatPanel
+            messages={messages}
+            currentUser={currentUser}
+            onSend={sendMessage}
+            onClose={toggleChat}
+          />
+        )}
       </main>
 
       {/* Toast notifications */}

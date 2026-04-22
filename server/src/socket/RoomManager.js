@@ -137,6 +137,16 @@ class RoomManager {
     return history;
   }
 
+  /** Push a pre-built item (e.g. a shape) straight into room history. */
+  addToHistory(roomId, item) {
+    const history = this.canvasHistory.get(roomId);
+    if (!history) return;
+    history.push(item);
+    if (history.length > 500) history.shift();
+    // New item clears the committing user's redo stack
+    if (item.userId) this.redoStacks.set(item.userId, []);
+  }
+
   // ─── Video participants ────────────────────────────────
 
   /** Returns list of existing video participants (excluding the joiner). */

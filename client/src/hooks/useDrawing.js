@@ -35,12 +35,13 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
 
   // ─── Remote rendering helpers ──────────────────────────
 
-  function _applyStart(ctx, { userId, x, y, color, width }) {
-    remoteStroke.current[userId] = { x, y, color: color || '#a855f7', width: width || 3 };
+  function _applyStart(ctx, { userId, x, y, color, width, isEraser }) {
+    remoteStroke.current[userId] = { x, y, color: color || '#a855f7', width: width || 3, isEraser: !!isEraser };
     ctx.save();
+    ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
     ctx.beginPath();
     ctx.arc(x, y, (width || 3) / 2, 0, Math.PI * 2);
-    ctx.fillStyle = color || '#a855f7';
+    ctx.fillStyle = isEraser ? 'rgba(0,0,0,1)' : (color || '#a855f7');
     ctx.fill();
     ctx.restore();
   }
@@ -51,7 +52,8 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
     ctx.save();
     ctx.lineCap    = 'round';
     ctx.lineJoin   = 'round';
-    ctx.strokeStyle = state.color;
+    ctx.globalCompositeOperation = state.isEraser ? 'destination-out' : 'source-over';
+    ctx.strokeStyle = state.isEraser ? 'rgba(0,0,0,1)' : state.color;
     ctx.lineWidth   = state.width;
     ctx.beginPath();
     ctx.moveTo(state.x, state.y);
@@ -84,6 +86,25 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
           remoteStroke.current = {};
           break;
         }
+        case 'shape': {
+          const { type, points, color, width } = ev.data;
+          const [p0, p1] = points || [];
+          if (!p0 || !p1) break;
+          ctx.save();
+          ctx.strokeStyle = color || '#a855f7';
+          ctx.lineWidth   = width  || 3;
+          ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+          ctx.beginPath();
+          if (type === 'rect') {
+            ctx.strokeRect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
+          } else {
+            ctx.moveTo(p0.x, p0.y);
+            ctx.lineTo(p1.x, p1.y);
+            ctx.stroke();
+          }
+          ctx.restore();
+          break;
+        }
       }
     }
   }
@@ -97,13 +118,13 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
   // ─── Outbound emit helpers ─────────────────────────────
 
   const emitDrawStart = useCallback((x, y) => {
-    // Reset throttle state for the new stroke
     lastEmitPos.current  = { x, y };
     lastEmitTime.current = Date.now();
     socket.emit('draw:start', {
       x, y,
-      color: toolState.current.color,
-      width: toolState.current.width,
+      color:    toolState.current.color,
+      width:    toolState.current.width,
+      isEraser: toolState.current.mode === 'erase',
     });
   }, [socket, toolState]);
 
@@ -144,34 +165,48 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
     socket.emit('canvas:redo');
   }, [socket]);
 
-  // ─── Replay canvas history (late-joiner) ──────────────
-  // Rendered synchronously — one-shot, no need for RAF.
+  /** Emit a committed shape (rect or line) to the server. */
+  const emitShape = useCallback((type, x1, y1, x2, y2) => {
+    socket.emit('draw:shape', {
+      type, x1, y1, x2, y2,
+      color: toolState.current.color,
+      width: toolState.current.width,
+    });
+  }, [socket, toolState]);
+
   const replayHistory = useCallback((history) => {
     const ctx = ctxRef.current;
     if (!ctx || !history?.length) return;
 
     for (const stroke of history) {
-      const { color, width, points } = stroke;
-      if (!points?.length) continue;
+      const { color, width, points, isEraser, type } = stroke;
 
       ctx.save();
       ctx.lineCap    = 'round';
       ctx.lineJoin   = 'round';
       ctx.strokeStyle = color || '#a855f7';
-      ctx.lineWidth   = width || 3;
+      ctx.lineWidth   = width  || 3;
+      ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
 
-      if (points.length === 1) {
+      if (type === 'rect' || type === 'line') {
+        const [p0, p1] = points || [];
+        if (!p0 || !p1) { ctx.restore(); continue; }
         ctx.beginPath();
-        ctx.arc(points[0].x, points[0].y, (width || 3) / 2, 0, Math.PI * 2);
-        ctx.fillStyle = color || '#a855f7';
-        ctx.fill();
+        if (type === 'rect') ctx.strokeRect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
+        else { ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke(); }
       } else {
-        ctx.beginPath();
-        ctx.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length; i++) {
-          ctx.lineTo(points[i].x, points[i].y);
+        if (!points?.length) { ctx.restore(); continue; }
+        if (points.length === 1) {
+          ctx.beginPath();
+          ctx.arc(points[0].x, points[0].y, (width || 3) / 2, 0, Math.PI * 2);
+          ctx.fillStyle = isEraser ? 'rgba(0,0,0,1)' : (color || '#a855f7');
+          ctx.fill();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+          ctx.stroke();
         }
-        ctx.stroke();
       }
       ctx.restore();
     }
@@ -186,6 +221,27 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
     const onMove  = (data) => { remoteQueue.current.push({ type: 'move',  data }); scheduleFlush(); };
     const onEnd   = (data) => { remoteQueue.current.push({ type: 'end',   data }); scheduleFlush(); };
     const onClear = ()     => { remoteQueue.current.push({ type: 'clear'       }); scheduleFlush(); };
+
+    // Remote shape: render immediately — no RAF needed for a single operation
+    const onShape = ({ type, points, color, width }) => {
+      const ctx = ctxRef.current;
+      if (!ctx) return;
+      const [p0, p1] = points || [];
+      if (!p0 || !p1) return;
+      ctx.save();
+      ctx.strokeStyle = color || '#a855f7';
+      ctx.lineWidth   = width  || 3;
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath();
+      if (type === 'rect') {
+        ctx.strokeRect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
+      } else {
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
 
     // Undo/redo: server sends authoritative full history → clear + replay
     const onHistoryUpdate = ({ history }) => {
@@ -206,17 +262,19 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
       replayHistory(history);
     };
 
-    socket.on('draw:start',          onStart);
-    socket.on('draw:move',           onMove);
-    socket.on('draw:end',            onEnd);
-    socket.on('canvas:clear',        onClear);
+    socket.on('draw:start',            onStart);
+    socket.on('draw:move',             onMove);
+    socket.on('draw:end',              onEnd);
+    socket.on('canvas:clear',          onClear);
+    socket.on('draw:shape',            onShape);
     socket.on('canvas:history-update', onHistoryUpdate);
 
     return () => {
-      socket.off('draw:start',          onStart);
-      socket.off('draw:move',           onMove);
-      socket.off('draw:end',            onEnd);
-      socket.off('canvas:clear',        onClear);
+      socket.off('draw:start',            onStart);
+      socket.off('draw:move',             onMove);
+      socket.off('draw:end',              onEnd);
+      socket.off('canvas:clear',          onClear);
+      socket.off('draw:shape',            onShape);
       socket.off('canvas:history-update', onHistoryUpdate);
 
       // Cancel any pending RAF on cleanup
@@ -228,5 +286,5 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, isJoined, ctxRef, canvasRef]);
 
-  return { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, emitUndo, emitRedo, replayHistory };
+  return { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, emitUndo, emitRedo, emitShape, replayHistory };
 }

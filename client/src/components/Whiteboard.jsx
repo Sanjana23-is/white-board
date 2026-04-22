@@ -35,13 +35,18 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
   // Tool state — kept in a ref so useDrawing can read current values without re-render
   const [color, setColor] = useState('#a855f7');
   const [width, setWidth] = useState(4);
-  const toolState = useRef({ color, width });
-  useEffect(() => { toolState.current = { color, width }; }, [color, width]);
+  const [mode,  setMode]  = useState('pen'); // 'pen' | 'erase' | 'rect' | 'line'
+  const toolState = useRef({ color, width, mode });
+  useEffect(() => { toolState.current = { color, width, mode }; }, [color, width, mode]);
+
+  // Shape mode: snapshot before drag, start position
+  const shapeStart    = useRef(null);
+  const shapeSnapshot = useRef(null);
 
   // Socket from context
   const { socket } = useContext(SocketContext);
 
-  const { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, emitUndo, emitRedo, replayHistory } =
+  const { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, emitUndo, emitRedo, emitShape, replayHistory } =
     useDrawing(socket, canvasRef, ctxRef, toolState, isJoined);
 
   const { remoteCursors, emitCursorMove, emitCursorHide } =
@@ -118,15 +123,18 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
     if (!ctx) return;
 
     const segments = localQueue.current.splice(0);
-    for (const { from, to, color, width } of segments) {
+    for (const { from, to, color, width, isEraser } of segments) {
+      ctx.save();
       ctx.lineCap    = 'round';
       ctx.lineJoin   = 'round';
+      ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
       ctx.strokeStyle = color;
       ctx.lineWidth   = width;
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);
       ctx.lineTo(to.x, to.y);
       ctx.stroke();
+      ctx.restore();
     }
   }, []);
 
@@ -136,43 +144,56 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
     lastPos.current = pos;
     setIsDrawing(true);
 
+    const { color, width, mode } = toolState.current;
     const ctx = ctxRef.current;
-    ctx.lineCap    = 'round';
-    ctx.lineJoin   = 'round';
-    ctx.strokeStyle = toolState.current.color;
-    ctx.lineWidth   = toolState.current.width;
 
-    // Draw a dot for single clicks — immediate, not batched
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, toolState.current.width / 2, 0, Math.PI * 2);
-    ctx.fillStyle = toolState.current.color;
-    ctx.fill();
-
-    if (isJoined) emitDrawStart(pos.x, pos.y);
-  }, [getPosition, isJoined, emitDrawStart]);
+    if (mode === 'pen' || mode === 'erase') {
+      ctx.save();
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over';
+      ctx.strokeStyle = color; ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, width / 2, 0, Math.PI * 2);
+      ctx.fillStyle = mode === 'erase' ? 'rgba(0,0,0,1)' : color;
+      ctx.fill();
+      ctx.restore();
+      if (isJoined) emitDrawStart(pos.x, pos.y);
+    } else {
+      // Shape mode — save snapshot for preview
+      const canvas = canvasRef.current;
+      shapeStart.current    = pos;
+      shapeSnapshot.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    }
+  }, [getPosition, isJoined, emitDrawStart, canvasRef]);
 
   const draw = useCallback((e) => {
     if (!isDrawing) return;
     e.preventDefault();
 
     const currentPos = getPosition(e);
-    const { color, width } = toolState.current;
+    const { color, width, mode } = toolState.current;
 
-    // Queue segment for RAF rendering — snapshot style at event time
-    localQueue.current.push({
-      from: { ...lastPos.current },
-      to:   currentPos,
-      color,
-      width,
-    });
-
-    // Schedule a single flush per frame
-    if (!localRafId.current) {
-      localRafId.current = requestAnimationFrame(flushLocalQueue);
+    if (mode === 'pen' || mode === 'erase') {
+      localQueue.current.push({
+        from: { ...lastPos.current }, to: currentPos,
+        color, width, isEraser: mode === 'erase',
+      });
+      if (!localRafId.current) localRafId.current = requestAnimationFrame(flushLocalQueue);
+      if (isJoined) emitDrawMove(currentPos.x, currentPos.y);
+    } else if (shapeSnapshot.current) {
+      // Shape preview — restore snapshot then draw preview
+      const ctx = ctxRef.current;
+      ctx.putImageData(shapeSnapshot.current, 0, 0);
+      ctx.save();
+      ctx.strokeStyle = color; ctx.lineWidth = width;
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      const { x: x1, y: y1 } = shapeStart.current;
+      const { x: x2, y: y2 } = currentPos;
+      ctx.beginPath();
+      if (mode === 'rect') ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      else { ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+      ctx.restore();
     }
-
-    if (isJoined) emitDrawMove(currentPos.x, currentPos.y);
-    // Also update cursor position while drawing
     emitCursorMove(currentPos.x, currentPos.y);
     lastPos.current = currentPos;
   }, [isDrawing, getPosition, toolState, isJoined, emitDrawMove, emitCursorMove, flushLocalQueue]);
@@ -180,8 +201,19 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
   const stopDrawing = useCallback(() => {
     if (!isDrawing) return;
     setIsDrawing(false);
-    if (isJoined) emitDrawEnd();
-  }, [isDrawing, isJoined, emitDrawEnd]);
+    const { mode, color, width } = toolState.current;
+
+    if (mode === 'pen' || mode === 'erase') {
+      if (isJoined) emitDrawEnd();
+    } else if (shapeSnapshot.current && shapeStart.current) {
+      // Commit shape — canvas already shows it from last preview
+      const { x: x1, y: y1 } = shapeStart.current;
+      const { x: x2, y: y2 } = lastPos.current;
+      if (isJoined) emitShape(mode, x1, y1, x2, y2);
+      shapeSnapshot.current = null;
+      shapeStart.current    = null;
+    }
+  }, [isDrawing, isJoined, emitDrawEnd, emitShape]);
 
   /** Track cursor position even when not drawing */
   const handleMouseMove = useCallback((e) => {
@@ -245,6 +277,26 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
           </svg>
           Canvas
         </span>
+
+        {/* Mode selector */}
+        <div className="toolbar-group" style={{ paddingLeft: 0, borderLeft: 'none' }}>
+          {[
+            { id: 'pen',   label: '✏️', title: 'Pen' },
+            { id: 'erase', label: '⬜', title: 'Eraser' },
+            { id: 'rect',  label: '▭',  title: 'Rectangle' },
+            { id: 'line',  label: '╱',  title: 'Line' },
+          ].map(({ id, label, title }) => (
+            <button
+              key={id}
+              id={`mode-${id}-btn`}
+              className={`btn btn-small btn-secondary${mode === id ? ' active-mode' : ''}`}
+              onClick={() => setMode(id)}
+              title={title}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
         {/* Color Picker */}
         <div className="toolbar-colors">

@@ -103,6 +103,22 @@ export function registerSocketHandlers(io, socket, roomManager) {
     }
   });
 
+  socket.on('draw:shape', ({ type, x1, y1, x2, y2, color, width }) => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId || !type) return;
+    // Store as a 2-point stroke with a type field so replay + undo work
+    const shape = {
+      type,
+      points: [{ x: x1, y: y1 }, { x: x2, y: y2 }],
+      color: color || '#a855f7',
+      width: width  || 3,
+      userId: socket.id,
+    };
+    roomManager.addToHistory(roomId, shape);
+    // Relay to every OTHER user in the room
+    socket.to(roomId).emit('draw:shape', { ...shape, userId: socket.id });
+  });
+
   // ─── WebRTC signaling relay ───────────────────────────
 
   socket.on('webrtc:join-video', () => {
