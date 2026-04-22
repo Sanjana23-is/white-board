@@ -3,11 +3,12 @@ import logger from '../utils/logger.js';
 
 class RoomManager {
   constructor() {
-    this.rooms           = new Map(); // roomId → Map<socketId, userData>
-    this.canvasHistory   = new Map(); // roomId → stroke[]
-    this.activeStrokes   = new Map(); // socketId → stroke in progress
-    this.videoParticipants = new Map(); // roomId → Set<socketId>
-    this.notes           = new Map(); // roomId → Map<noteId, note>
+    this.rooms             = new Map();
+    this.canvasHistory     = new Map();
+    this.activeStrokes     = new Map();
+    this.redoStacks        = new Map(); // socketId → stroke[]
+    this.videoParticipants = new Map();
+    this.notes             = new Map();
   }
 
   // ─── Room membership ───────────────────────────────────
@@ -37,6 +38,7 @@ class RoomManager {
     const user = room.get(socketId);
     room.delete(socketId);
     this.activeStrokes.delete(socketId);
+    this.redoStacks.delete(socketId);
     this.leaveVideo(roomId, socketId);
 
     if (room.size === 0) {
@@ -78,8 +80,11 @@ class RoomManager {
     if (!stroke || !roomId) return;
     const history = this.canvasHistory.get(roomId);
     if (history) {
-      history.push(stroke);
+      // Tag stroke with owner so undo can find it later
+      history.push({ ...stroke, userId: socketId });
       if (history.length > 500) history.shift();
+      // Any new stroke clears the user's redo stack
+      this.redoStacks.set(socketId, []);
     }
   }
 
@@ -90,7 +95,46 @@ class RoomManager {
   clearCanvas(roomId) {
     this.canvasHistory.set(roomId, []);
     const room = this.rooms.get(roomId);
-    if (room) for (const sid of room.keys()) this.activeStrokes.delete(sid);
+    if (room) {
+      for (const sid of room.keys()) {
+        this.activeStrokes.delete(sid);
+        this.redoStacks.delete(sid); // also clear redo stacks on hard clear
+      }
+    }
+  }
+
+  /** Remove the calling user's last stroke; returns updated history or null. */
+  undoStroke(socketId, roomId) {
+    const history = this.canvasHistory.get(roomId);
+    if (!history) return null;
+
+    // Find last stroke owned by this user
+    let idx = -1;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].userId === socketId) { idx = i; break; }
+    }
+    if (idx === -1) return null; // nothing to undo
+
+    const [stroke] = history.splice(idx, 1);
+
+    // Push onto redo stack
+    if (!this.redoStacks.has(socketId)) this.redoStacks.set(socketId, []);
+    this.redoStacks.get(socketId).push(stroke);
+
+    return history; // caller will broadcast this
+  }
+
+  /** Re-apply the user's last undone stroke; returns updated history or null. */
+  redoStroke(socketId, roomId) {
+    const redoStack = this.redoStacks.get(socketId);
+    if (!redoStack?.length) return null;
+
+    const stroke = redoStack.pop();
+    const history = this.canvasHistory.get(roomId);
+    if (!history) return null;
+
+    history.push(stroke);
+    return history;
   }
 
   // ─── Video participants ────────────────────────────────

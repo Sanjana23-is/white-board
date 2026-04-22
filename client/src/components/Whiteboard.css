@@ -20,6 +20,15 @@
   flex-wrap: wrap;
 }
 
+/* Grouped toolbar sections with a subtle divider */
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
 .toolbar-title {
   display: flex;
   align-items: center;

@@ -136,6 +136,14 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
     socket.emit('canvas:clear');
   }, [socket]);
 
+  const emitUndo = useCallback(() => {
+    socket.emit('canvas:undo');
+  }, [socket]);
+
+  const emitRedo = useCallback(() => {
+    socket.emit('canvas:redo');
+  }, [socket]);
+
   // ─── Replay canvas history (late-joiner) ──────────────
   // Rendered synchronously — one-shot, no need for RAF.
   const replayHistory = useCallback((history) => {
@@ -179,16 +187,37 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
     const onEnd   = (data) => { remoteQueue.current.push({ type: 'end',   data }); scheduleFlush(); };
     const onClear = ()     => { remoteQueue.current.push({ type: 'clear'       }); scheduleFlush(); };
 
-    socket.on('draw:start',   onStart);
-    socket.on('draw:move',    onMove);
-    socket.on('draw:end',     onEnd);
-    socket.on('canvas:clear', onClear);
+    // Undo/redo: server sends authoritative full history → clear + replay
+    const onHistoryUpdate = ({ history }) => {
+      // ① Cancel any queued remote RAF — stale draw:move segments from the
+      //    just-undone stroke must NOT be flushed on top of the fresh redraw.
+      if (remoteRafId.current) {
+        cancelAnimationFrame(remoteRafId.current);
+        remoteRafId.current = null;
+      }
+      remoteQueue.current  = [];  // drain buffered remote events
+      remoteStroke.current = {};  // reset all in-progress remote stroke states
+
+      // ② Clear and replay from server-authoritative history
+      const ctx    = ctxRef.current;
+      const canvas = canvasRef.current;
+      if (!ctx || !canvas) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      replayHistory(history);
+    };
+
+    socket.on('draw:start',          onStart);
+    socket.on('draw:move',           onMove);
+    socket.on('draw:end',            onEnd);
+    socket.on('canvas:clear',        onClear);
+    socket.on('canvas:history-update', onHistoryUpdate);
 
     return () => {
-      socket.off('draw:start',   onStart);
-      socket.off('draw:move',    onMove);
-      socket.off('draw:end',     onEnd);
-      socket.off('canvas:clear', onClear);
+      socket.off('draw:start',          onStart);
+      socket.off('draw:move',           onMove);
+      socket.off('draw:end',            onEnd);
+      socket.off('canvas:clear',        onClear);
+      socket.off('canvas:history-update', onHistoryUpdate);
 
       // Cancel any pending RAF on cleanup
       if (remoteRafId.current) {
@@ -199,5 +228,5 @@ export function useDrawing(socket, canvasRef, ctxRef, toolState, isJoined) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, isJoined, ctxRef, canvasRef]);
 
-  return { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, replayHistory };
+  return { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, emitUndo, emitRedo, replayHistory };
 }

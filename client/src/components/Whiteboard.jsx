@@ -41,7 +41,7 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
   // Socket from context
   const { socket } = useContext(SocketContext);
 
-  const { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, replayHistory } =
+  const { emitDrawStart, emitDrawMove, emitDrawEnd, emitClear, emitUndo, emitRedo, replayHistory } =
     useDrawing(socket, canvasRef, ctxRef, toolState, isJoined);
 
   const { remoteCursors, emitCursorMove, emitCursorHide } =
@@ -81,10 +81,21 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
     window.addEventListener('resize', resize);
     return () => {
       window.removeEventListener('resize', resize);
-      // Cancel any pending RAF on unmount
       if (localRafId.current) cancelAnimationFrame(localRafId.current);
     };
   }, []);
+
+  // ─── Keyboard shortcuts: Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z ─
+  useEffect(() => {
+    function onKeyDown(e) {
+      const ctrl = e.ctrlKey || e.metaKey;
+      if (!ctrl || !isJoined) return;
+      if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); emitUndo(); }
+      if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) { e.preventDefault(); emitRedo(); }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isJoined, emitUndo, emitRedo]);
 
   // Expose replayHistory so Room.jsx can call it after room:joined
   useImperativeHandle(ref, () => ({ replayHistory }), [replayHistory]);
@@ -187,6 +198,33 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
     createNote(cx, cy);
   }, [canvasRef, createNote]);
 
+  // ─── Export ────────────────────────────────────────────
+
+  const exportPNG = useCallback(() => {
+    const canvas = canvasRef.current;
+    const link = document.createElement('a');
+    link.download = `syncboard-${Date.now()}.png`;
+    link.href = canvas.toDataURL('image/png', 1.0);
+    link.click();
+  }, [canvasRef]);
+
+  const exportPDF = useCallback(async () => {
+    const canvas = canvasRef.current;
+    const imgData = canvas.toDataURL('image/png', 1.0);
+    const w = canvas.width;
+    const h = canvas.height;
+    // Dynamic import keeps jsPDF out of the initial bundle
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF({
+      orientation: w >= h ? 'landscape' : 'portrait',
+      unit: 'px',
+      format: [w, h],
+      hotfixes: ['px_scaling'],
+    });
+    pdf.addImage(imgData, 'PNG', 0, 0, w, h);
+    pdf.save(`syncboard-${Date.now()}.pdf`);
+  }, [canvasRef]);
+
   // ─── Clear ────────────────────────────────────────────
   const handleClear = useCallback(() => {
     const canvas = canvasRef.current;
@@ -244,6 +282,34 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
           ))}
         </div>
 
+        {/* Undo / Redo */}
+        <div className="toolbar-group">
+          <button
+            id="undo-btn"
+            className="btn btn-secondary btn-small"
+            onClick={emitUndo}
+            disabled={!isJoined}
+            title="Undo (Ctrl+Z)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+            </svg>
+            Undo
+          </button>
+          <button
+            id="redo-btn"
+            className="btn btn-secondary btn-small"
+            onClick={emitRedo}
+            disabled={!isJoined}
+            title="Redo (Ctrl+Y)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M21 7v6h-6" /><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
+            </svg>
+            Redo
+          </button>
+        </div>
+
         {/* Add Note */}
         <button
           id="add-note-btn"
@@ -271,6 +337,35 @@ const Whiteboard = forwardRef(function Whiteboard({ isJoined = false, users = []
           </svg>
           Clear
         </button>
+
+        {/* Export */}
+        <div className="toolbar-group">
+          <button
+            id="export-png-btn"
+            className="btn btn-secondary btn-small"
+            onClick={exportPNG}
+            title="Save as PNG"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            PNG
+          </button>
+          <button
+            id="export-pdf-btn"
+            className="btn btn-secondary btn-small"
+            onClick={exportPDF}
+            title="Save as PDF"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+            PDF
+          </button>
+        </div>
       </div>
 
       {/* Canvas */}

@@ -83,6 +83,26 @@ export function registerSocketHandlers(io, socket, roomManager) {
     logger.info(`canvas:clear in room ${roomId}`);
   });
 
+  socket.on('canvas:undo', () => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId) return;
+    const history = roomManager.undoStroke(socket.id, roomId);
+    if (history !== null) {
+      io.to(roomId).emit('canvas:history-update', { history });
+      logger.info(`canvas:undo by ${socket.id} in ${roomId}`);
+    }
+  });
+
+  socket.on('canvas:redo', () => {
+    const roomId = roomManager.findRoomBySocket(socket.id);
+    if (!roomId) return;
+    const history = roomManager.redoStroke(socket.id, roomId);
+    if (history !== null) {
+      io.to(roomId).emit('canvas:history-update', { history });
+      logger.info(`canvas:redo by ${socket.id} in ${roomId}`);
+    }
+  });
+
   // ─── WebRTC signaling relay ───────────────────────────
 
   socket.on('webrtc:join-video', () => {
